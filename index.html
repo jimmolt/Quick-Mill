@@ -244,6 +244,7 @@ table.tools .nop{color:var(--wrn);background:var(--wrnbg);border-radius:50%;disp
 .setupstat.ok{background:rgba(63,154,74,.16);color:#2c7a36}
 .setupstat.bad{background:var(--wrnbg);color:var(--wrn)}
 @media (prefers-color-scheme:dark){.setupstat.ok{color:#8fd99a}}
+.gb.me.ed{outline:3px solid var(--acc);background:var(--accink)}
 
 </style>
 </head>
@@ -1689,7 +1690,8 @@ if (typeof module !== 'undefined') module.exports = QM;
       return t.id;
     };
     let i = 0;
-    const ask = spec => { if (i < W.answers.length) { const a = W.answers[i++]; ctx.log.push({ spec, a }); return a.v; } throw { pending: spec }; };
+    const fits = (spec, a) => spec.type === 'choice' ? spec.opts.some(o => o.v === a.v) : spec.type === 'xy' ? !!a.v && typeof a.v === 'object' && 'x' in a.v : typeof a.v === 'string';
+    const ask = spec => { if (i < W.answers.length) { const a = W.answers[i]; if (fits(spec, a)) { i++; ctx.log.push({ spec, a }); return a.v; } W.answers.length = i; } throw { pending: spec }; }; // an edited answer can change what comes next: later answers are kept while they still fit
     try { guideScript(ask, ctx); ctx.done = true; } catch (e) { if (!e || !e.pending) throw e; ctx.cur = e.pending; }
     W.added = ctx.added; S.job = ctx.out.job; S.feats = ctx.out.feats; S.sel = null;
     return ctx;
@@ -1697,17 +1699,19 @@ if (typeof module !== 'undefined') module.exports = QM;
   function startGuide() {
     const j = S.job;
     W = { answers: [], seed: Date.now().toString(36), base: { job: clone(S.job), feats: clone(S.feats) }, added: [], prefs: { wcs: j.wcs, clearZ: j.clearZ, retract: j.retract, maxRpm: j.maxRpm, coolant: j.coolant, optStop: j.optStop, endPos: j.endPos === 'xy' || j.endPos === 'none' ? j.endPos : 'y', group: j.group } };
-    mode = 'sel'; stepGuide();
+    W.edit = null; mode = 'sel'; stepGuide();
   }
   function stepGuide() {
     const ctx = runGuide(); renderJob(); renderBar(); refresh(true);
     if (ctx.done) return endGuide(true, ctx);
     const g = $('#guide'); g.hidden = false; $('#job').hidden = true; $('#feats').hidden = true;
-    const q = ctx.cur, bub = (cls, html, extra) => '<div class="gb ' + cls + '"' + (extra || '') + '>' + html + '</div>';
+    if (W.edit != null && !ctx.log[W.edit]) W.edit = null;
+    const ed = W.edit, q = ed != null ? ctx.log[ed].spec : ctx.cur, bub = (cls, html, extra) => '<div class="gb ' + cls + '"' + (extra || '') + '>' + html + '</div>';
     let h = '<div class="ghead"><b>Guided setup</b><span class="sp"></span>' + (W.answers.length ? '<button data-act="gback">&#8592; Back</button>' : '') + '<button data-act="gexit" title="Leave the guide and keep what is built so far">Exit guide</button></div><div class="gchat" id="gchat">';
     if (!ctx.log.length) h += bub('bot', 'I will ask a few questions and build the part and its program as we go. Watch it take shape on the right.');
-    ctx.log.forEach((l, n) => { h += bub('bot', esc(l.spec.q)) + bub('me', esc(l.a.label), ' data-act="gjump" data-i="' + n + '" title="Click to change this answer"'); });
-    h += bub('bot cur', '<b>' + esc(q.q) + '</b>' + (q.help ? '<span>' + esc(q.help) + '</span>' : '') + (q.pic ? '<div class="gpic">' + q.pic + '</div>' : '')) + '</div><div class="gans">';
+    ctx.log.forEach((l, n) => { h += bub('bot', esc(l.spec.q)) + bub('me' + (n === ed ? ' ed' : ''), esc(l.a.label), ' data-act="gjump" data-i="' + n + '" title="Click to change this answer"'); });
+    if (ed != null) h += bub('bot cur', '<b>Changing: ' + esc(q.q) + '</b><span>Your other answers stay. Pick or type the new answer.</span>' + (q.help ? '<span>' + esc(q.help) + '</span>' : '') + (q.pic ? '<div class="gpic">' + q.pic + '</div>' : ''));
+    else h += bub('bot cur', '<b>' + esc(q.q) + '</b>' + (q.help ? '<span>' + esc(q.help) + '</span>' : '') + (q.pic ? '<div class="gpic">' + q.pic + '</div>' : '')) + '</div><div class="gans">';
     if (q.type === 'choice') h += '<div class="gopts c' + (q.cols || 1) + '">' + q.opts.map((o, n) => '<button data-act="gpick" data-i="' + n + '"' + (o.pri ? ' class="pri"' : '') + '><b>' + esc(o.label) + '</b>' + (o.sub ? '<span>' + esc(o.sub) + '</span>' : '') + '</button>').join('') + '</div>';
     else {
       const chips = (q.chips || []).map((c, n) => '<button data-act="gchip" data-i="' + n + '">' + esc(c.label) + '</button>').join('');
@@ -1715,10 +1719,12 @@ if (typeof module !== 'undefined') module.exports = QM;
       else h += '<div class="gin"><label>' + (q.type === 'text' ? '' : 'in') + '<input type="text" id="gx"' + (q.type === 'text' ? '' : ' inputmode="decimal"') + ' autocomplete="off"></label><button class="pri" data-act="gok">OK</button>' + (q.optional ? '<button data-act="gskip">Skip</button>' : '') + '</div>';
       h += (chips ? '<div class="gchips">' + chips + '</div>' : '') + '<div class="gerr" id="gerr"></div>';
     }
+    if (ed != null) h += '<div class="gin"><button data-act="gcancel">Keep my old answer</button></div>';
     g.innerHTML = h + '</div>'; W.cur = q;
-    const ch = $('#gchat'); ch.scrollTop = ch.scrollHeight; const f0 = $('#gx'); if (f0) f0.focus();
+    const ch = $('#gchat'); ch.scrollTop = ch.scrollHeight; const f0 = $('#gx');
+    if (f0) { if (ed != null) { const o = ctx.log[ed].a.v; if (q.type === 'xy') { f0.value = o.x; $('#gy').value = o.y; } else if (typeof o === 'string') f0.value = o; f0.select(); } f0.focus(); }
   }
-  function answer(v, label) { W.answers.push({ v, label }); stepGuide(); }
+  function answer(v, label) { if (W.edit != null) { W.answers[W.edit] = { v, label }; W.edit = null; } else W.answers.push({ v, label }); stepGuide(); }
   function guideOk() {
     const q = W.cur, err = m => { $('#gerr').textContent = m; };
     if (q.type === 'text') { const t = $('#gx').value.trim(); if (!t && !q.optional) return err('Type something first'); return answer(t, t || 'Skipped'); }
@@ -1805,8 +1811,9 @@ if (typeof module !== 'undefined') module.exports = QM;
     if (a === 'guide') { $('#gdone').hidden = true; startGuide(); return; }
     if (a === 'gdismiss') { $('#gdone').hidden = true; return; }
     if (a === 'gexit') { endGuide(false); return; }
-    if (a === 'gback') { W.answers.pop(); stepGuide(); return; }
-    if (a === 'gjump') { W.answers.length = +d.i; stepGuide(); return; }
+    if (a === 'gback') { if (W.edit != null) W.edit = null; else W.answers.pop(); stepGuide(); return; }
+    if (a === 'gjump') { W.edit = +d.i; stepGuide(); return; }
+    if (a === 'gcancel') { W.edit = null; stepGuide(); return; }
     if (a === 'gpick') { const o = W.cur.opts[+d.i]; answer(o.v, o.label); return; }
     if (a === 'gchip') { const c = W.cur.chips[+d.i]; if (W.cur.type === 'xy') answer({ x: c.x, y: c.y }, c.label); else answer(c.v, c.label); return; }
     if (a === 'gok') { guideOk(); return; }
